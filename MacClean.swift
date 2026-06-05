@@ -795,14 +795,16 @@ struct DiskEntry: Identifiable {
     var progress: Double = 0
 }
 
-struct ExternalVolume: Identifiable, Hashable {
-    let id: URL
-    let name: String
-    let freeBytes: Int64
+struct Destination: Identifiable, Hashable {
+    enum Kind { case externalDrive, googleDrive }
+    let id: URL          // volume root, or ".../My Drive/MacClean Backups"
+    let name: String     // "Samsung T7" / "Google Drive (user@gmail.com)"
+    let kind: Kind
+    let freeBytes: Int64?   // nil for Google Drive (quota unknowable from the mount)
 
-    // Identity by URL only — freeBytes changes between scans, and including it
-    // would break Picker selection matching (stale tag → blank picker).
-    static func == (lhs: ExternalVolume, rhs: ExternalVolume) -> Bool { lhs.id == rhs.id }
+    // Identity by URL only: freeBytes changes between scans, and including it
+    // would break Picker selection matching (stale tag -> blank picker).
+    static func == (lhs: Destination, rhs: Destination) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
@@ -812,41 +814,76 @@ final class DiskUsageModel: ObservableObject {
     @Published var entries: [DiskEntry] = []
     @Published var isScanning: Bool = false
     @Published var scannedCount: Int = 0
-    @Published var volumes: [ExternalVolume] = []
-    @Published var destination: ExternalVolume? = nil
+    @Published var destinations: [Destination] = []
+    @Published var destination: Destination? = nil
 
     init() {
         folder = FileManager.default.homeDirectoryForCurrentUser
-        refreshVolumes()
+        refreshDestinations()
     }
 
     var totalBytes: Int64 {
         entries.reduce(0) { $0 + $1.sizeBytes }
     }
 
-    /// Mounted external (non-internal) volumes available as move destinations.
-    func refreshVolumes() {
+    /// Mounted external (non-internal) volumes plus signed-in Google Drive
+    /// accounts, offered as send destinations. Externals first, then Drive.
+    func refreshDestinations() {
+        var found: [Destination] = []
+
         let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsInternalKey, .volumeAvailableCapacityKey]
         let urls = FileManager.default.mountedVolumeURLs(
             includingResourceValuesForKeys: keys,
             options: [.skipHiddenVolumes]
         ) ?? []
-        var found: [ExternalVolume] = []
         for url in urls {
             guard let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             if values.volumeIsInternal == true { continue }
             let name = values.volumeName ?? url.lastPathComponent
             let free = Int64(values.volumeAvailableCapacity ?? 0)
-            found.append(ExternalVolume(id: url, name: name, freeBytes: free))
+            found.append(Destination(id: url, name: name, kind: .externalDrive, freeBytes: free))
         }
-        volumes = found
+
+        found.append(contentsOf: Self.googleDriveDestinations())
+
+        destinations = found
         // Rebind destination to the FRESH instance (freeBytes differs each scan);
-        // keep same drive if still mounted, else fall back to first available.
+        // keep the same destination if still present, else first available.
         if let dest = destination, let match = found.first(where: { $0.id == dest.id }) {
             destination = match
         } else {
             destination = found.first
         }
+    }
+
+    /// One destination per signed-in Google Drive account, pointing at
+    /// "My Drive/MacClean Backups" (created lazily on first send).
+    nonisolated static func googleDriveDestinations() -> [Destination] {
+        let fm = FileManager.default
+        let cloudStorage = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/CloudStorage")
+        guard let entries = try? fm.contentsOfDirectory(
+            at: cloudStorage,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var result: [Destination] = []
+        for entry in entries {
+            let dirName = entry.lastPathComponent
+            guard dirName.hasPrefix("GoogleDrive-") else { continue }
+            let myDrive = entry.appendingPathComponent("My Drive")
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: myDrive.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let account = String(dirName.dropFirst("GoogleDrive-".count))
+            result.append(Destination(
+                id: myDrive.appendingPathComponent("MacClean Backups"),
+                name: "Google Drive (\(account))",
+                kind: .googleDrive,
+                freeBytes: nil
+            ))
+        }
+        return result.sorted { $0.name < $1.name }
     }
 
     func scan() async {
@@ -882,7 +919,7 @@ final class DiskUsageModel: ObservableObject {
     /// Move one entry to the selected external volume. Confirms first; copy-then-delete
     /// fallback for cross-volume moves. Returns nothing; updates entry status / rescans.
     func moveEntry(_ entry: DiskEntry) async {
-        refreshVolumes()
+        refreshDestinations()
         guard let dest = destination else {
             setStatus(for: entry.id, "No external drive connected")
             return
@@ -890,7 +927,7 @@ final class DiskUsageModel: ObservableObject {
         // Re-verify the destination is still mounted (drive is flaky).
         guard FileManager.default.fileExists(atPath: dest.id.path) else {
             setStatus(for: entry.id, "Drive \(dest.name) unmounted")
-            refreshVolumes()
+            refreshDestinations()
             return
         }
 
@@ -927,7 +964,7 @@ final class DiskUsageModel: ObservableObject {
                 try FileManager.default.removeItem(at: src)
                 endMoving(for: entry.id, status: nil)
                 await scan()
-                refreshVolumes()
+                refreshDestinations()
                 NotificationCenter.default.post(name: .storageChanged, object: nil)
             } catch {
                 endMoving(for: entry.id, status: "Copied OK, source delete failed")
@@ -1190,28 +1227,35 @@ struct DiskUsageView: View {
         HStack(spacing: 6) {
             Image(systemName: "externaldrive")
                 .foregroundStyle(.secondary)
-            if model.volumes.isEmpty {
-                Text("No external drive")
+            if model.destinations.isEmpty {
+                Text("No destination")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button {
-                    model.refreshVolumes()
+                    model.refreshDestinations()
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .help("Re-check for connected drives")
+                .help("Re-check for drives and Google Drive")
             } else {
-                Picker("Move to", selection: $model.destination) {
-                    ForEach(model.volumes) { vol in
-                        Text("\(vol.name) (\(ByteCountFormatter.string(fromByteCount: vol.freeBytes, countStyle: .file)) free)")
-                            .tag(ExternalVolume?.some(vol))
+                Picker("Send to", selection: $model.destination) {
+                    ForEach(model.destinations) { dest in
+                        Text(destinationLabel(dest))
+                            .tag(Destination?.some(dest))
                     }
                 }
                 .labelsHidden()
                 .frame(maxWidth: 220)
             }
         }
+    }
+
+    private func destinationLabel(_ dest: Destination) -> String {
+        if let free = dest.freeBytes {
+            return "\(dest.name) (\(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) free)"
+        }
+        return dest.name
     }
 
     private var footer: some View {
