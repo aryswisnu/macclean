@@ -971,11 +971,8 @@ final class DiskUsageModel: ObservableObject {
         let error = await copyTask.value
 
         if let error = error {
-            // Clean up a partial copy, but never delete a pre-existing item
-            // at the destination (copyTree wrote nothing in that case).
-            if error != "Already exists at destination" {
-                try? FileManager.default.removeItem(at: target)
-            }
+            // Leave the partial at the destination: it is resumable progress
+            // for the next attempt.
             endMoving(for: entry.id, status: error)
             return
         }
@@ -1059,19 +1056,19 @@ final class DiskUsageModel: ObservableObject {
         }
     }
 
-    /// Recursively copies src → target in chunks, calling `report` with the
-    /// running total of bytes copied (throttled). Returns nil on success or an
-    /// error message. Does NOT delete the source — caller does that after this
-    /// returns nil (copy verified).
+    /// Recursively copies src -> target in chunks, resuming a previous
+    /// partial transfer: destination files whose logical size already matches
+    /// the source are skipped (their bytes still count toward progress).
+    /// Calls `report` with the running total of completed bytes (throttled).
+    /// Returns nil on success or an error message. Does NOT delete the
+    /// source; the caller does that after a nil return (every source file is
+    /// then present at the destination with a matching logical size).
     nonisolated static func copyTree(
         from src: URL,
         to target: URL,
         report: @escaping (Int64) -> Void
     ) -> String? {
         let fm = FileManager.default
-        if fm.fileExists(atPath: target.path) {
-            return "Already exists at destination"
-        }
 
         var copied: Int64 = 0
         var lastReported: Int64 = 0
@@ -1090,6 +1087,11 @@ final class DiskUsageModel: ObservableObject {
         }
 
         if isDir.boolValue {
+            // A file sitting where the directory should go is a stale
+            // partial: replace it.
+            if let err = removeIfTypeMismatch(at: target, expectDirectory: true) {
+                return err
+            }
             do {
                 try fm.createDirectory(at: target, withIntermediateDirectories: true)
             } catch {
@@ -1107,20 +1109,75 @@ final class DiskUsageModel: ObservableObject {
                 let dest = target.appendingPathComponent(rel)
                 let values = try? item.resourceValues(forKeys: [.isDirectoryKey])
                 if values?.isDirectory == true {
+                    if let err = removeIfTypeMismatch(at: dest, expectDirectory: true) {
+                        return err
+                    }
                     try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
                 } else {
-                    if let err = copyFileChunked(from: item, to: dest, bump: bump) {
+                    if let err = copyFileResumable(from: item, to: dest, bump: bump) {
                         return err
                     }
                 }
             }
         } else {
-            if let err = copyFileChunked(from: src, to: target, bump: bump) {
+            if let err = copyFileResumable(from: src, to: target, bump: bump) {
                 return err
             }
         }
 
         report(copied)  // final 100%
+        return nil
+    }
+
+    /// Copies one file unless the destination already holds a complete copy
+    /// (equal logical byte size), which is skipped with its size counted
+    /// toward progress. A partial or mismatched file is recopied from scratch
+    /// (createFile truncates any existing content).
+    nonisolated static func copyFileResumable(
+        from src: URL,
+        to dest: URL,
+        bump: (Int64) -> Void
+    ) -> String? {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: dest.path) {
+            if let err = removeIfTypeMismatch(at: dest, expectDirectory: false) {
+                return err
+            }
+            if fm.fileExists(atPath: dest.path),
+               let srcSize = logicalFileSize(at: src),
+               let destSize = logicalFileSize(at: dest),
+               srcSize == destSize {
+                bump(srcSize)  // already transferred; count it and move on
+                return nil
+            }
+        }
+        return copyFileChunked(from: src, to: dest, bump: bump)
+    }
+
+    /// Logical (not allocated) byte size, or nil if unreadable. Allocated
+    /// sizes differ across filesystems (APFS vs DriveFS), so resume
+    /// comparisons must use logical bytes.
+    nonisolated static func logicalFileSize(at url: URL) -> Int64? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+            return nil
+        }
+        return Int64(size)
+    }
+
+    /// Removes the destination item when its type (file vs directory) does
+    /// not match what the copy is about to write. Returns an error message on
+    /// removal failure, nil otherwise (including when nothing exists there).
+    nonisolated static func removeIfTypeMismatch(at url: URL, expectDirectory: Bool) -> String? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return nil }
+        if isDir.boolValue != expectDirectory {
+            do {
+                try fm.removeItem(at: url)
+            } catch {
+                return "Cannot replace \(url.lastPathComponent) at destination"
+            }
+        }
         return nil
     }
 
