@@ -86,7 +86,7 @@ if security find-identity -p codesigning 2>/dev/null | grep -q "${SIGN_ID}"; the
         && echo "Signed with: ${SIGN_ID}" \
         || codesign --force --deep --sign - "${APP_DIR}" 2>/dev/null || true
 else
-    echo "Note: '${SIGN_ID}' identity not found — ad-hoc signing (TCC grants won't persist)."
+    echo "Note: '${SIGN_ID}' identity not found, ad-hoc signing (TCC grants won't persist)."
     codesign --force --deep --sign - "${APP_DIR}" 2>/dev/null || true
 fi
 
