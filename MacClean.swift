@@ -617,7 +617,7 @@ struct VolumeBar: View {
                 Text("\(fmt(vol.available)) available · \(fmt(vol.purgeable)) purgeable")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .help("macOS counts free + purgeable (caches, snapshots) as available — this matches Finder/About.")
+                    .help("macOS counts free + purgeable (caches, snapshots) as available. This matches Finder/About.")
             }
             Text("\(Int(vol.usedFraction * 100))% used")
                 .font(.caption2)

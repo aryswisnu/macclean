@@ -13,7 +13,10 @@ rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/Contents/MacOS"
 mkdir -p "${APP_DIR}/Contents/Resources"
 
-# Build icon if missing
+# Build icon if missing. MacClean.icns is committed to the repo and is the
+# source of truth for CI release builds (so the runner never has to render it).
+# If you change make_icon.swift, regenerate and commit the icon:
+#   rm MacClean.icns && ./make_icon.sh && git add MacClean.icns
 if [ ! -f MacClean.icns ]; then
     ./make_icon.sh
 fi
