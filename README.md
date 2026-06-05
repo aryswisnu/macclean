@@ -37,8 +37,8 @@ Reclaiming space triggers a small celebration.
 
 ## Requirements
 
-- macOS 13 or later
-- Swift toolchain (`swiftc`, from Xcode or the Command Line Tools)
+- macOS 13 or later (this is all the curl installer needs)
+- Swift toolchain (`swiftc`, from Xcode or the Command Line Tools), only if you build from source (see [Build](#build))
 - Optional: **Full Disk Access** for MacClean, so it can read protected caches
   (granted from System Settings, with a one-click button in the app)
 - Optional: **Homebrew**, for the Homebrew cleanup target
