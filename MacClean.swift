@@ -916,23 +916,39 @@ final class DiskUsageModel: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    /// Move one entry to the selected external volume. Confirms first; copy-then-delete
-    /// fallback for cross-volume moves. Returns nothing; updates entry status / rescans.
-    func moveEntry(_ entry: DiskEntry) async {
+    /// Send one entry to the selected destination. The user picks Copy (keep
+    /// the original) or Move (delete the original after a verified copy).
+    /// Chunked copy with byte progress; cross-volume safe.
+    func sendEntry(_ entry: DiskEntry) async {
         refreshDestinations()
         guard let dest = destination else {
-            setStatus(for: entry.id, "No external drive connected")
+            setStatus(for: entry.id, "No destination available")
             return
         }
-        // Re-verify the destination is still mounted (drive is flaky).
-        guard FileManager.default.fileExists(atPath: dest.id.path) else {
-            setStatus(for: entry.id, "Drive \(dest.name) unmounted")
+        // Re-verify the destination is still mounted (drives and DriveFS are
+        // flaky). For Google Drive the backup folder may not exist yet, so
+        // check its parent ("My Drive", which exists iff the mount is alive).
+        let mountCheck: URL = dest.kind == .googleDrive
+            ? dest.id.deletingLastPathComponent()
+            : dest.id
+        guard FileManager.default.fileExists(atPath: mountCheck.path) else {
+            setStatus(for: entry.id, "\(dest.name) not available")
             refreshDestinations()
             return
         }
 
-        let confirmed = await confirmMove(name: entry.name, bytes: entry.sizeBytes, dest: dest.name)
-        guard confirmed else { return }
+        let action = await confirmSend(name: entry.name, bytes: entry.sizeBytes, dest: dest)
+        guard action != .cancel else { return }
+
+        // Lazily create "MacClean Backups" on Google Drive (idempotent).
+        if dest.kind == .googleDrive {
+            do {
+                try FileManager.default.createDirectory(at: dest.id, withIntermediateDirectories: true)
+            } catch {
+                setStatus(for: entry.id, "Cannot create backup folder on Google Drive")
+                return
+            }
+        }
 
         beginMoving(for: entry.id)
         let src = entry.url
@@ -955,10 +971,20 @@ final class DiskUsageModel: ObservableObject {
         let error = await copyTask.value
 
         if let error = error {
-            // Copy failed — leave source intact, clean up partial destination.
-            try? FileManager.default.removeItem(at: target)
+            // Clean up a partial copy, but never delete a pre-existing item
+            // at the destination (copyTree wrote nothing in that case).
+            if error != "Already exists at destination" {
+                try? FileManager.default.removeItem(at: target)
+            }
             endMoving(for: entry.id, status: error)
-        } else {
+            return
+        }
+
+        switch action {
+        case .copy:
+            // Source stays; nothing freed locally, so no storageChanged post.
+            endMoving(for: entry.id, status: "Copied to \(dest.name)")
+        case .move:
             // Copy verified by copyTree; now remove the source.
             do {
                 try FileManager.default.removeItem(at: src)
@@ -969,6 +995,8 @@ final class DiskUsageModel: ObservableObject {
             } catch {
                 endMoving(for: entry.id, status: "Copied OK, source delete failed")
             }
+        case .cancel:
+            break
         }
     }
 
@@ -976,7 +1004,7 @@ final class DiskUsageModel: ObservableObject {
         if let idx = entries.firstIndex(where: { $0.id == id }) {
             entries[idx].isMoving = true
             entries[idx].progress = 0
-            entries[idx].statusMessage = "Moving… 0%"
+            entries[idx].statusMessage = "Sending… 0%"
         }
     }
 
@@ -984,7 +1012,7 @@ final class DiskUsageModel: ObservableObject {
         if let idx = entries.firstIndex(where: { $0.id == id }) {
             let clamped = min(max(value, 0), 1)
             entries[idx].progress = clamped
-            entries[idx].statusMessage = "Moving… \(Int(clamped * 100))%"
+            entries[idx].statusMessage = "Sending… \(Int(clamped * 100))%"
         }
     }
 
@@ -1002,15 +1030,32 @@ final class DiskUsageModel: ObservableObject {
         }
     }
 
-    private func confirmMove(name: String, bytes: Int64, dest: String) async -> Bool {
+    enum SendAction {
+        case copy
+        case move
+        case cancel
+    }
+
+    private func confirmSend(name: String, bytes: Int64, dest: Destination) async -> SendAction {
         await MainActor.run {
             let alert = NSAlert()
-            alert.messageText = "Move \(name) to \(dest)?"
-            alert.informativeText = "Moves \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) to the external drive and removes it from this Mac."
+            alert.messageText = "Send \(name) to \(dest.name)?"
+            let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            var info = "Copy keeps the original on this Mac. Move sends \(size) and removes it from this Mac."
+            if dest.kind == .googleDrive {
+                info += " Uploads finish in the background via the Google Drive app."
+            }
+            alert.informativeText = info
+            alert.alertStyle = .warning
+            // Button order = return order: first..third.
+            alert.addButton(withTitle: "Copy")
             alert.addButton(withTitle: "Move")
             alert.addButton(withTitle: "Cancel")
-            alert.alertStyle = .warning
-            return alert.runModal() == .alertFirstButtonReturn
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:  return .copy
+            case .alertSecondButtonReturn: return .move
+            default:                       return .cancel
+            }
         }
     }
 
@@ -1025,7 +1070,7 @@ final class DiskUsageModel: ObservableObject {
     ) -> String? {
         let fm = FileManager.default
         if fm.fileExists(atPath: target.path) {
-            return "Already exists on drive"
+            return "Already exists at destination"
         }
 
         var copied: Int64 = 0
@@ -1184,7 +1229,7 @@ struct DiskUsageView: View {
                             canMove: model.destination != nil,
                             destinationName: model.destination?.name,
                             revealAction: { model.reveal(entry.url) },
-                            moveAction: { Task { await model.moveEntry(entry) } }
+                            moveAction: { Task { await model.sendEntry(entry) } }
                         )
                     }
                 }
