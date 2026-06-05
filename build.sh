@@ -7,6 +7,7 @@ APP_NAME="MacClean"
 APP_DIR="${APP_NAME}.app"
 BIN_NAME="${APP_NAME}"
 BUNDLE_ID="com.local.macclean"
+APP_VERSION="${VERSION:-1.0}"
 
 rm -rf "${APP_DIR}"
 mkdir -p "${APP_DIR}/Contents/MacOS"
@@ -18,14 +19,30 @@ if [ ! -f MacClean.icns ]; then
 fi
 cp MacClean.icns "${APP_DIR}/Contents/Resources/MacClean.icns"
 
-# Compile
-swiftc -O \
-    -parse-as-library \
-    -target arm64-apple-macos13 \
-    -framework SwiftUI \
-    -framework AppKit \
-    -o "${APP_DIR}/Contents/MacOS/${BIN_NAME}" \
-    MacClean.swift
+# Compile. UNIVERSAL=1 builds a fat arm64 + x86_64 binary (for distribution);
+# the default single-arch arm64 build stays fast for local iteration.
+BIN_PATH="${APP_DIR}/Contents/MacOS/${BIN_NAME}"
+compile_slice() {
+    swiftc -O \
+        -parse-as-library \
+        -target "$1" \
+        -framework SwiftUI \
+        -framework AppKit \
+        -o "$2" \
+        MacClean.swift
+}
+
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+    TMP_ARM="$(mktemp)"
+    TMP_X86="$(mktemp)"
+    compile_slice arm64-apple-macos13 "${TMP_ARM}"
+    compile_slice x86_64-apple-macos13 "${TMP_X86}"
+    lipo -create "${TMP_ARM}" "${TMP_X86}" -output "${BIN_PATH}"
+    rm -f "${TMP_ARM}" "${TMP_X86}"
+    echo "Compiled universal (arm64 + x86_64)"
+else
+    compile_slice arm64-apple-macos13 "${BIN_PATH}"
+fi
 
 # Info.plist
 cat > "${APP_DIR}/Contents/Info.plist" <<EOF
@@ -44,9 +61,9 @@ cat > "${APP_DIR}/Contents/Info.plist" <<EOF
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
