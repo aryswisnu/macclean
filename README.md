@@ -44,6 +44,24 @@ Reclaiming space triggers a small celebration.
 - Optional: **Homebrew**, for the Homebrew cleanup target
 - Optional: **Google Drive for desktop**, signed in, for Google Drive backups
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aryswisnu/macclean/main/install.sh | bash
+```
+
+This downloads the latest release, installs `MacClean.app` to `/Applications`
+(or `~/Applications` if that is not writable), and removes the macOS quarantine
+flag so the app opens on first launch.
+
+MacClean is ad-hoc signed, not Apple-notarized, so a freshly downloaded copy
+would otherwise be blocked by Gatekeeper. The installer clears that flag for
+you. If you prefer to do it by hand, download `MacClean.zip` from the
+[Releases page](https://github.com/aryswisnu/macclean/releases), unzip it into
+`/Applications`, then run `xattr -dr com.apple.quarantine /Applications/MacClean.app`.
+
+Prefer to build it yourself? See [Build](#build) below.
+
 ## Build
 
 ```bash
