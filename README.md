@@ -31,7 +31,9 @@ lets you **Send** each one to a destination of your choice:
 Destinations are mounted external drives and any signed-in Google Drive account.
 Google Drive items land in `My Drive/MacClean Backups`, uploaded in the
 background by the Google Drive app. Copies are chunked and verified before the
-source is ever removed.
+source is ever removed. If a send is interrupted, sending it again resumes
+where it left off: files already transferred are skipped and only the missing
+or incomplete ones are copied.
 
 Reclaiming space triggers a small celebration.
 
@@ -69,9 +71,11 @@ Prefer to build it yourself? See [Build](#build) below.
 open MacClean.app
 ```
 
-`build.sh` compiles `MacClean.swift`, generates the app icon on first run, and
-code-signs the bundle (ad-hoc by default; see the script for using a stable
-local signing identity so Full Disk Access grants survive rebuilds).
+`build.sh` compiles `MacClean.swift` (set `UNIVERSAL=1` for a fat arm64 +
+x86_64 binary, as the release build does), generates the app icon if
+`MacClean.icns` is missing, and code-signs the bundle (ad-hoc by default; see
+the script for using a stable local signing identity so Full Disk Access grants
+survive rebuilds).
 
 ## How it works
 
@@ -89,9 +93,10 @@ source after the copy completes without error.
 
 Every destructive action asks for confirmation and reports how much it will
 remove. Cleanup deletes are permanent (they do not go to Trash), so the
-confirmation matters. A failed or partial copy never deletes your source file,
-and sending an item that already exists at the destination is refused rather
-than overwriting it.
+confirmation matters. A failed or partial copy never deletes your source file:
+the partial is kept at the destination so the next send resumes it, and Move
+removes the local original only once every file is verified present at the
+destination.
 
 ## License
 
