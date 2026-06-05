@@ -1093,7 +1093,7 @@ final class DiskUsageModel: ObservableObject {
             do {
                 try fm.createDirectory(at: target, withIntermediateDirectories: true)
             } catch {
-                return "Cannot create folder on drive: \(error.localizedDescription)"
+                return "Cannot create folder at destination: \(error.localizedDescription)"
             }
             guard let enumerator = fm.enumerator(
                 at: src,
@@ -1138,7 +1138,7 @@ final class DiskUsageModel: ObservableObject {
             let input = try FileHandle(forReadingFrom: src)
             defer { try? input.close() }
             guard fm.createFile(atPath: dest.path, contents: nil) else {
-                return "Cannot create \(dest.lastPathComponent) on drive"
+                return "Cannot create \(dest.lastPathComponent) at destination"
             }
             let output = try FileHandle(forWritingTo: dest)
             defer { try? output.close() }
