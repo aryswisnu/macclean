@@ -89,6 +89,13 @@ Moving a file copies it in 4 MB chunks with the unified buffer cache bypassed
 (`F_NOCACHE`) so large transfers do not balloon memory, and only deletes the
 source after the copy completes without error.
 
+Because the Google Drive folder is a local mount, a copy finishes at SSD speed
+and the actual upload to Google happens afterward, in the background, handled by
+the Google Drive app. A Move removes your local original once the file is
+written to that local folder, which is before the cloud upload completes. For
+anything important, prefer Copy, or wait for the Google Drive app to report "up
+to date" before deleting the local copy.
+
 ## Safety
 
 Every destructive action asks for confirmation and reports how much it will

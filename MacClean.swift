@@ -1040,7 +1040,7 @@ final class DiskUsageModel: ObservableObject {
             let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
             var info = "Copy keeps the original on this Mac. Move sends \(size) and removes it from this Mac."
             if dest.kind == .googleDrive {
-                info += " Uploads finish in the background via the Google Drive app."
+                info += " Google Drive uploads in the background, so after a Move, wait for the Google Drive app to show \"up to date\" before relying on the backup."
             }
             alert.informativeText = info
             alert.alertStyle = .warning
