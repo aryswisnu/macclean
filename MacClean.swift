@@ -1226,10 +1226,10 @@ struct DiskUsageView: View {
                         DiskEntryRow(
                             entry: entry,
                             total: model.totalBytes,
-                            canMove: model.destination != nil,
+                            canSend: model.destination != nil,
                             destinationName: model.destination?.name,
                             revealAction: { model.reveal(entry.url) },
-                            moveAction: { Task { await model.sendEntry(entry) } }
+                            sendAction: { Task { await model.sendEntry(entry) } }
                         )
                     }
                 }
@@ -1320,10 +1320,10 @@ struct DiskUsageView: View {
 struct DiskEntryRow: View {
     let entry: DiskEntry
     let total: Int64
-    let canMove: Bool
+    let canSend: Bool
     let destinationName: String?
     let revealAction: () -> Void
-    let moveAction: () -> Void
+    let sendAction: () -> Void
 
     private var fraction: Double {
         total > 0 ? Double(entry.sizeBytes) / Double(total) : 0
@@ -1361,12 +1361,12 @@ struct DiskEntryRow: View {
                 .monospacedDigit()
                 .frame(width: 90, alignment: .trailing)
             Button {
-                moveAction()
+                sendAction()
             } label: {
-                Label("Move", systemImage: "arrow.right.circle")
+                Label("Send", systemImage: "arrow.right.circle")
             }
-            .disabled(!canMove || entry.isMoving)
-            .help(canMove ? "Move to \(destinationName ?? "external drive")" : "Connect an external drive first")
+            .disabled(!canSend || entry.isMoving)
+            .help(canSend ? "Copy or move to \(destinationName ?? "destination")" : "Connect a drive or sign in to Google Drive first")
             Button {
                 revealAction()
             } label: {
